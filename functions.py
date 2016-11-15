@@ -4,14 +4,36 @@ import matplotlib.pyplot as plt
 from scipy.ndimage import measurements,morphology
 import scipy.stats as stats
 import scipy.spatial.distance as dst
+from sklearn import preprocessing
 
+def find_cleft_ind(cleft_num):
+    z_slices = len(labels_sparse)
+    x = np.array([]); y = np.array([]); z = np.array([])
+    for z_slc in range(z_slices):
+        (y_coord,x_coord) = np.nonzero(labels_sparse[z_slc]==cleft_num)
+        num_ind = len(y_coord)
+        z_coord = z_slc*np.ones((num_ind))
+        x = np.concatenate((x,x_coord),axis=0)
+        y = np.concatenate((y,y_coord),axis=0)
+        z = np.concatenate((z,z_coord),axis=0)
+    return (z,y,x)
+
+        
 def find_dist(cleft_num,raw=False,syn_map=False,z_slice=False):
     ind = np.nonzero(labels==cleft_num)
-    z_min = max(min(ind[0]) - 5,0); z_max = min(max(ind[0]) + 5,124)
-    y_min = max(min(ind[1]) - 50,0); y_max = min(max(ind[1]) + 50,1249)
-    x_min = max(min(ind[2]) - 50,0); x_max = min(max(ind[2]) + 50,1249)
-    cleft_box = labels[z_min:z_max,y_min:y_max,x_min:x_max].copy()
+    #ind = find_cleft_ind(cleft_num)
+    z_min = int(max(min(ind[0]) - 3,0));  z_max = int(min(max(ind[0]) + 3,124))
+    y_min = int(max(min(ind[1]) - 30,0)); y_max = int(min(max(ind[1]) + 30,1249))
+    x_min = int(max(min(ind[2]) - 30,0)); x_max = int(min(max(ind[2]) + 30,1249))
+    
+    """
+    cleft_box = np.zeros((z_max - z_min + 1,y_max - y_min + 1 ,x_max - x_min + 1))
+    for z in range(z_min,z_max + 1):
+        cleft_box[z-z_min,:,:] = labels_sparse[z][y_min:y_max+1,x_min:x_max+1].toarray()
+    """
+    cleft_box = labels[z_min:z_max,y_min:y_max,x_min:x_max]   
     cleft_bol = 1 - 1*(cleft_box==cleft_num)
+    
     dist_cleft = ndimage.distance_transform_edt(cleft_bol,sampling=[40,4,4])
     neuron_box = data_neurons[z_min:z_max,y_min:y_max,x_min:x_max].copy()
     
@@ -36,14 +58,14 @@ def find_dist(cleft_num,raw=False,syn_map=False,z_slice=False):
         return neuron_box, dist_cleft
         
   
-def features_neurons(cleft_num,rad):
+def features_neurons(rad,cleft_num):
     #data
     neuron_box, dist_cleft, raw_box = find_dist(cleft_num,raw=True)
     #region characteristics
     neigh_ind = np.nonzero(dist_cleft<=rad); neigh_vol = float(len(neigh_ind[0]))
     #cleft characteristics
     cleft_ind = np.nonzero(dist_cleft<=0.25); mass_cleft = float(len(cleft_ind[0])); 
-    R_cleft = sum(np.asarray(cleft_ind),axis=1)/mass_cleft; den_cleft = mass_cleft/neigh_vol
+    R_cleft = np.sum(np.asarray(cleft_ind),axis=1)/mass_cleft; den_cleft = mass_cleft/neigh_vol
     #neurons in the cleft
     neurons = np.unique(neuron_box[neigh_ind]); nmb_neurons = len(neurons)
     #features  
@@ -58,9 +80,9 @@ def features_neurons(cleft_num,rad):
         #density
         den_i = mass_i/neigh_vol        
         #contact region 
-        contact_i = sum(1*(neuron_box[cleft_ind]==neuron_i))/mass_cleft; 
+        contact_i = np.sum(1*(neuron_box[cleft_ind]==neuron_i))/mass_cleft; 
         #center of mass
-        R_i = sum(np.asarray(new_ind),axis=1)/mass_i
+        R_i = np.sum(np.asarray(new_ind),axis=1)/mass_i
         R_coord_neurons[i,:] = R_i - R_cleft
         #distance to the cleft
         dist_i = np.linalg.norm(R_i - R_cleft)
@@ -68,6 +90,7 @@ def features_neurons(cleft_num,rad):
         intensities_i = raw_box[new_ind]
         stats_neurons[i,:] = statistics(intensities_i)
         geom_feat[i,:] = np.array([den_i,dist_i,contact_i])
+    stats_neurons = preprocessing.scale(stats_neurons)
     return  [cleft_num,rad,den_cleft,neurons, R_coord_neurons, geom_feat,stats_neurons]
         
 def statistics(intensities):
@@ -78,9 +101,10 @@ def statistics(intensities):
     kurt = stats.kurtosis(intensities); skw = stats.skew(intensities);
     return mean,med,mode,variance,std_dev,min_int,max_int,rang,q1,q3,IQR,kurt,skw
 
-mu, sigma = 0, 100; teta = np.random.normal(mu, sigma, 36)
+mu, sigma = 0, 1; teta = np.random.normal(mu, sigma, 666)
 
 def cost_function(features_neurons,Theta):
+    #len(Theta) = 1 +35 + 35 + (35:2) = 666 
     cleft_num,rad,den_cleft,neurons, R_coord_neurons, geom_feat,stats_neurons = features_neurons[:]
     nmb_neurons = len(neurons); C = np.zeros((nmb_neurons,nmb_neurons))
     distances = dst.squareform(dst.pdist(R_coord_neurons,'euclidean'))
@@ -88,52 +112,49 @@ def cost_function(features_neurons,Theta):
     for i in range(0,nmb_neurons):
         for j in range(0,nmb_neurons):
             if i!=j:
-               x_ij = np.concatenate((np.array([1]),geom_feat[i,:],stats_neurons[i,:],np.array([distances[i,j],den_cleft,angles[i,j]]), geom_feat[j,:],stats_neurons[j,:]),axis=0)
-               C[i,j] = np.dot(x_ij,Theta.T)
+               x_ij = np.concatenate((geom_feat[i,:],stats_neurons[i,:],np.array([distances[i,j],den_cleft,angles[i,j]]), geom_feat[j,:],stats_neurons[j,:]),axis=0)
+               X_ij = np.concatenate((np.array([1]),x_ij,quadratic_feat(x_ij)),axis=0)
+               C[i,j] = np.dot(X_ij,Theta.T)
     return C, neurons
     
+def quadratic_feat(x):
+    n = len(x); pol2 = np.array([]);
+    for i in range(n):
+        for j in range(i,n):
+            pol2 = np.concatenate((pol2,np.array([x[i]*x[j]])),axis=0)
+    return pol2
+    
+def cubic_feat(x):
+    n = len(x); pol3 = np.array([]);
+    for i in range(n):
+        for j in range(i,n):
+            for k in range(j,n):
+                pol3 = np.concatenate((pol3,np.array([x[i]*x[j]*x[k]])),axis=0)
+    return pol3    
+    
+# C = np.array([[0,-5,-3,0,0],[0,0,0,0,-8],[0,0,0,-1.5,0],[5,2,-1,0,0],[-7,2,6,8,0]])
+
 def ILPsolver(C, neuron_names):
     n = len(neuron_names)
-    C_copy = C.copy()
-    neu_neg = 1*(C_copy<0)
-    graph = {}
-    for k in range(0,n):
-        ind_neg = np.nonzero(neu_neg[k,:]==1)
-        graph[neuron_names[k]] = neuron_names[ind_neg]
-    print graph
-    strong_comp = np.array(tarjan(graph))
-    print strong_comp
-    nOfNodesComp = np.array(map(len, strong_comp))
-    cycles = any((nOfNodesComp!=1))
-    while cycles==True:
-       ind_loops = np.nonzero(nOfNodesComp>1)
-       nmb_cycles = len(ind_loops[0])
-       for p in range(0,nmb_cycles):
-          loop_neurons = strong_comp[ind_loops[0][p]]
-          c_max = - np.inf; c_max_ind = (); len_loop = len(loop_neurons)
-          for l in range(0,len_loop):
-              for m in range(0,len_loop):
-                      ind_i = np.nonzero(neuron_names==loop_neurons[l])[0][0]
-                      ind_j = np.nonzero(neuron_names==loop_neurons[m])[0][0]
-                      c_ij = C_copy[ind_i,ind_j]
-                      if l!=m and c_ij > c_max and c_ij < 0:
-                         c_max = c_ij
-                         c_max_ind = (ind_i,ind_j)
-          C_copy[c_max_ind] = 0    
-          neuron_i = neuron_names[c_max_ind[0]]; neuron_j = neuron_names[c_max_ind[1]] 
-          neuron_delete = np.nonzero(graph[neuron_i]==neuron_j)
-          graph[neuron_i] = np.delete(graph[neuron_i],neuron_delete)  
-       print graph             
-       strong_comp = np.array(tarjan(graph))
-       print strong_comp
-       nOfNodesComp = np.array(map(len, strong_comp))
-       cycles = any((nOfNodesComp!=1))
-    return graph
+    neu_neg = 1*(C<0)
+    graph = C*neu_neg  
+    solver = FastSolver(graph)
+    solution = solver.solve()
+    pairs = set({})
+    for i in range(n):
+        for j in range(n):
+            if solution[i,j]>0:
+                neu_i = neuron_names[i]; neu_j = neuron_names[j]; 
+                pairs = pairs.union({(neu_i,neu_j)})
+    return pairs 
     
-
-
-
-         
+def get_pred_pairs(rad,cleft_num,Theta):
+    features = features_neurons(rad,cleft_num)
+    C,neurons = cost_function(features,Theta)
+    pairs = ILPsolver(C,neurons)
+    return pairs
+    
+       
 
 
          
