@@ -13,8 +13,7 @@ def plot_neigh(rad,cleft_num,i):
     raw_box[border_ind] = 1
     #pre_ind, pos_ind, pre_neurons, pos_neurons = find_pre_pos(rad,cleft_num)  
     plt.imshow(raw_box[i,:,:], cmap=plt.cm.gray)
-    return z_min, z_max
-    
+    return z_min, z_max  
 
 def plot_neuron_size(cleft_num,neuron_num):
     rads = np.linspace(0,15,15)
